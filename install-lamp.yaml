@@ -1,0 +1,119 @@
+---
+- name: Install LAMP on Ubuntu
+  hosts: all
+  become: yes
+  vars_files:
+    - vars/default.yml
+  
+  tasks:
+    - name: Install prerequisites
+      apt: name={{ item }} update_cache=yes state=latest
+      loop: [ 'aptitude', 'software-properties-common' ]
+    
+    - name: Add repository for PHP 8.2
+      apt_repository:
+        repo: ppa:ondrej/php
+        state: present
+
+    - name: Install LAMP Packages
+      apt: name={{ item }} update_cache=yes state=latest
+      loop: 
+        - 'apache2'
+        - 'mariadb-server'
+        - 'mariadb-client'
+        - 'php8.2'
+        - 'php8.2-mysql'
+        - 'php8.2-cli'
+        - 'php8.2-common'
+        - 'php8.2-curl'
+        - 'php8.2-json'
+        - 'php8.2-cgi'
+        - 'php8.2-gd'
+        - 'php8.2-mbstring'
+        - 'php8.2-xml'
+        - 'php8.2-zip'
+        - 'libapache2-mod-php8.2'
+        - 'python3-pymysql'
+
+    - name: Enable Apache mods
+      apache2_module:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - rewrite
+        - headers
+      notify: Restart Apache
+
+    - name: Create document root
+      file:
+        path: "/var/www/{{ http_host }}"
+        state: directory
+        owner: "{{ app_user }}"
+        mode: '0755'
+
+    - name: Disable default Apache site
+      apache2_site:
+        name: 000-default.conf
+        state: absent
+      when: disable_default
+      notify: Reload Apache
+
+    - name: Create Apache VirtualHost
+      template:
+        src: "templates/vhost.conf.j2"
+        dest: "/etc/apache2/sites-available/{{ http_host }}.conf"
+      notify: Reload Apache
+
+    - name: Enable site
+      apache2_site:
+        name: "{{ http_host }}.conf"
+        state: present
+      notify: Reload Apache
+
+    # MySQL Configuration
+    - name: Sets the root password
+      mysql_user:
+        name: root
+        password: "{{ mysql_root_password }}"
+        login_unix_socket: /var/run/mysqld/mysqld.sock
+        state: present
+      ignore_errors: true
+
+    - name: Removes all anonymous user accounts
+      mysql_user:
+        name: ''
+        host_all: yes
+        state: absent
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+    - name: Removes the MySQL test database
+      mysql_db:
+        name: test
+        state: absent
+        login_user: root
+        login_password: "{{ mysql_root_password }}"
+
+    # UFW Configuration
+    - name: "UFW - Allow HTTP on port {{ http_port }}"
+      ufw:
+        rule: allow
+        port: "{{ http_port }}"
+        proto: tcp
+
+  # PHP Info Page
+    - name: Sets Up PHP Info Page
+      template:
+        src: "files/info.php.j2"
+        dest: "/var/www/{{ http_host }}/info.php"
+
+  handlers:
+    - name: Reload Apache
+      service:
+        name: apache2
+        state: reloaded
+
+    - name: Restart Apache
+      service:
+        name: apache2
+        state: restarted
